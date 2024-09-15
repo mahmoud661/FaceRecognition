@@ -1,24 +1,46 @@
 import tkinter as tk
 from tkinter import ttk
-from functions import capture_and_train, recognize_faces, ensure_directories_exist
+from functions import capture_and_train, recognize_faces
+import os
 
-# Create the main application window
+if not os.path.exists('dataset'):
+    os.makedirs('dataset')
+if not os.path.exists('trainer'):
+    os.makedirs('trainer')  # Create the main application window
 root = tk.Tk()
 root.title("Face Recognition System")
+root.geometry("700x500")
+root.configure(bg="#0a0a0a")  # Darker background for a sleek look
 
+# Style for buttons
+style = ttk.Style()
 
-# Create a frame for buttons
-frame = ttk.Frame(root, padding="10")
-frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+style.configure("TButton",
+                font=("Helvetica", 16, "bold"),
+                foreground="#f1c40f",
+                background="#0a0a0a",
+                padding=15,
+                borderwidth=1,
+                focusthickness=0,
+                relief="flat")
 
-# Define buttons and their commands
-train_button = ttk.Button(
-    frame, text="Capture and Train", command=capture_and_train)
-train_button.grid(row=0, column=0, padx=5, pady=5)
+style.map("TButton",
+          background=[("active", "#0a0a0a"), ("!disabled", "#0a0a0a")],
+          foreground=[("pressed", "#f1c40f"), ("active", "#f1c40f")])
+
+# Title label
+label = ttk.Label(root, text="Face Recognition System", font=("Helvetica", 24, "bold"),
+                  foreground="#f1c40f", background="#0a0a0a")
+label.pack(pady=20)
+
+# Buttons for capturing/training and recognition
+capture_button = ttk.Button(
+    root, text="Capture & Train Faces", command=capture_and_train, style="TButton")
+capture_button.pack(pady=30)
 
 recognize_button = ttk.Button(
-    frame, text="Recognize Faces", command=recognize_faces)
-recognize_button.grid(row=1, column=0, padx=5, pady=5)
+    root, text="Recognize Faces", command=recognize_faces, style="TButton")
+recognize_button.pack(pady=30)
 
-# Start the GUI event loop
+# Start the tkinter main loop
 root.mainloop()

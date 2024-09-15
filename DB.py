@@ -1,7 +1,10 @@
 import psycopg2
+import numpy as np
+import psycopg2.extras
 
 
 def connect_db():
+    """Establish a connection to the PostgreSQL database."""
     print("Connecting to the database...")
     try:
         conn = psycopg2.connect(
@@ -19,92 +22,114 @@ def connect_db():
 
 
 def create_table_if_not_exists():
-    try:
-        conn = connect_db()
-        cur = conn.cursor()
-        create_table_query = '''
-        CREATE TABLE IF NOT EXISTS Users (
-            id SERIAL PRIMARY KEY,
-            name TEXT NOT NULL,
-            face_embedding BYTEA
-        );
-        '''
-        cur.execute(create_table_query)
-        conn.commit()
-        print("Table 'Users' has been created (if it did not exist).")
-        cur.close()
-        conn.close()
-    except Exception as e:
-        print(f"Error: {e}")
+    """Create the Users table if it does not already exist."""
+    conn = connect_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                create_table_query = '''
+                CREATE TABLE IF NOT EXISTS Users (
+                    id SERIAL PRIMARY KEY,
+                    name TEXT NOT NULL UNIQUE,
+                    face_embedding BYTEA
+                );
+                '''
+                cur.execute(create_table_query)
+                conn.commit()
+                print("Table 'Users' has been created (if it did not exist).")
+        except Exception as e:
+            print(f"Error: {e}")
+        finally:
+            conn.close()
 
 
 def insert_user(name):
+    """Insert a new user into the Users table."""
     conn = connect_db()
     if conn:
         try:
-            cur = conn.cursor()
-            cur.execute(
-                "INSERT INTO Users (name) VALUES (%s) RETURNING id;", (name,))
-            user_id = cur.fetchone()[0]
-            conn.commit()
-            cur.close()
-            conn.close()
-            return user_id
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO Users (name) VALUES (%s) RETURNING id;", (name,))
+                user_id = cur.fetchone()[0]
+                conn.commit()
+                print(f"User {name} inserted with ID {user_id}.")
+                return user_id
         except Exception as e:
             print(f"Error inserting user: {e}")
             return None
+        finally:
+            conn.close()
 
 
 def insert_face_embedding(name, embedding=None):
-    conn = connect_db()
-    if conn is None:
-        return
-
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            "INSERT INTO Users (name, face_embedding) VALUES (%s, %s)",
-            (name, embedding)
-        )
-        conn.commit()
-        print(f"Inserted {name}'s face embedding.")
-    except Exception as e:
-        print(f"Error inserting embedding: {e}")
-    finally:
-        cur.close()
-        conn.close()
-
-
-def fetch_all_users():
+    """Insert or update a user's face embedding."""
     conn = connect_db()
     if conn:
         try:
-            cur = conn.cursor()
-            cur.execute("SELECT id, name FROM Users;")
-            users = cur.fetchall()
-            cur.close()
+            with conn.cursor() as cur:
+                if embedding is not None:
+                    embedding_bytes = embedding.tobytes()
+                    cur.execute(
+                        "UPDATE Users SET face_embedding = %s WHERE name = %s",
+                        (psycopg2.Binary(embedding_bytes), name)
+                    )
+                    conn.commit()
+                    print(f"Inserted/Updated {name}'s face embedding.")
+                else:
+                    print("No embedding provided.")
+        except Exception as e:
+            print(f"Error inserting embedding: {e}")
+        finally:
             conn.close()
-            return {user[0]: user[1] for user in users}
+
+
+def fetch_all_users():
+    """Fetch all users from the Users table."""
+    conn = connect_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, name FROM Users;")
+                users = cur.fetchall()
+                return {user[0]: user[1] for user in users}
         except Exception as e:
             print(f"Error fetching users: {e}")
             return {}
+        finally:
+            conn.close()
+
+
+def fetch_all_user_embeddings():
+    """Fetch all user embeddings from the Users table."""
+    conn = connect_db()
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name, face_embedding FROM Users;")
+                embeddings = cur.fetchall()
+                # Convert bytes back to numpy array
+                return {embedding[0]: np.frombuffer(embedding[1], dtype=np.float32) for embedding in embeddings}
+        except Exception as e:
+            print(f"Error fetching embeddings: {e}")
+            return {}
+        finally:
+            conn.close()
 
 
 def user_exists(name):
+    """Check if a user exists in the Users table."""
     conn = connect_db()
-    if conn is None:
-        return False
-
-    try:
-        cur = conn.cursor()
-        cur.execute("SELECT COUNT(*) FROM Users WHERE name = %s", (name,))
-        result = cur.fetchone()[0]
-        return result > 0
-    except Exception as e:
-        print(f"Error checking if user exists: {e}")
-        return False
-    finally:
-        cur.close()
-        conn.close()
-
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT COUNT(*) FROM Users WHERE name = %s", (name,))
+                result = cur.fetchone()[0]
+                return result > 0
+        except Exception as e:
+            print(f"Error checking if user exists: {e}")
+            return False
+        finally:
+            conn.close()
 
