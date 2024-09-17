@@ -19,10 +19,4 @@ This Face Recognition System is a Python-based application that allows users to 
 - `numpy` for numerical operations
 - `psycopg2` for PostgreSQL database connectivity
 
-## Installation
 
-1. **Clone the repository:**
-
-   ```bash
-   git clone https://github.com/yourusername/face-recognition-system.git
-   cd face-recognition-system
