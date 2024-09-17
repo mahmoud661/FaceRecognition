@@ -1,7 +1,5 @@
 import psycopg2
 import numpy as np
-import psycopg2.extras
-
 
 def connect_db():
     """Establish a connection to the PostgreSQL database."""
@@ -20,7 +18,6 @@ def connect_db():
         print(f"Error connecting to the database: {e}")
         return None
 
-
 def create_table_if_not_exists():
     """Create the Users table if it does not already exist."""
     conn = connect_db()
@@ -33,15 +30,19 @@ def create_table_if_not_exists():
                     name TEXT NOT NULL UNIQUE,
                     face_embedding BYTEA
                 );
+                CREATE TABLE IF NOT EXISTS UserImages (
+                    id SERIAL PRIMARY KEY,
+                    user_name TEXT REFERENCES Users(name),
+                    image_path TEXT
+                );
                 '''
                 cur.execute(create_table_query)
                 conn.commit()
-                print("Table 'Users' has been created (if it did not exist).")
+                print("Tables 'Users' and 'UserImages' have been created (if they did not exist).")
         except Exception as e:
             print(f"Error: {e}")
         finally:
             conn.close()
-
 
 def insert_user(name):
     """Insert a new user into the Users table."""
@@ -61,7 +62,6 @@ def insert_user(name):
         finally:
             conn.close()
 
-
 def insert_face_embedding(name, embedding=None):
     """Insert or update a user's face embedding."""
     conn = connect_db()
@@ -71,65 +71,61 @@ def insert_face_embedding(name, embedding=None):
                 if embedding is not None:
                     embedding_bytes = embedding.tobytes()
                     cur.execute(
-                        "UPDATE Users SET face_embedding = %s WHERE name = %s",
-                        (psycopg2.Binary(embedding_bytes), name)
-                    )
+                        "UPDATE Users SET face_embedding = %s WHERE name = %s;",
+                        (psycopg2.Binary(embedding_bytes), name))
                     conn.commit()
-                    print(f"Inserted/Updated {name}'s face embedding.")
+                    print(f"Updated face embedding for {name}.")
                 else:
                     print("No embedding provided.")
         except Exception as e:
-            print(f"Error inserting embedding: {e}")
+            print(f"Error inserting face embedding: {e}")
         finally:
             conn.close()
 
-
-def fetch_all_users():
-    """Fetch all users from the Users table."""
-    conn = connect_db()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT id, name FROM Users;")
-                users = cur.fetchall()
-                return {user[0]: user[1] for user in users}
-        except Exception as e:
-            print(f"Error fetching users: {e}")
-            return {}
-        finally:
-            conn.close()
-
-
-def fetch_all_user_embeddings():
-    """Fetch all user embeddings from the Users table."""
-    conn = connect_db()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute("SELECT name, face_embedding FROM Users;")
-                embeddings = cur.fetchall()
-                # Convert bytes back to numpy array
-                return {embedding[0]: np.frombuffer(embedding[1], dtype=np.float32) for embedding in embeddings}
-        except Exception as e:
-            print(f"Error fetching embeddings: {e}")
-            return {}
-        finally:
-            conn.close()
-
-
-def user_exists(name):
-    """Check if a user exists in the Users table."""
+def insert_user_image(name, image_path):
+    """Insert the path of a user's face image."""
     conn = connect_db()
     if conn:
         try:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT COUNT(*) FROM Users WHERE name = %s", (name,))
-                result = cur.fetchone()[0]
-                return result > 0
+                    "INSERT INTO UserImages (user_name, image_path) VALUES (%s, %s);",
+                    (name, image_path))
+                conn.commit()
+                print(f"Inserted image path for {name}: {image_path}.")
         except Exception as e:
-            print(f"Error checking if user exists: {e}")
-            return False
+            print(f"Error inserting image path: {e}")
         finally:
             conn.close()
 
+def fetch_all_user_embeddings():
+    """Fetch all user embeddings from the database."""
+    conn = connect_db()
+    embeddings = {}
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT name, face_embedding FROM Users;")
+                rows = cur.fetchall()
+                for name, embedding in rows:
+                    embeddings[name] = np.frombuffer(embedding, dtype=np.float64)
+        except Exception as e:
+            print(f"Error fetching embeddings: {e}")
+        finally:
+            conn.close()
+    return embeddings
+
+def user_exists(name):
+    """Check if a user exists in the database."""
+    conn = connect_db()
+    exists = False
+    if conn:
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT EXISTS(SELECT 1 FROM Users WHERE name=%s);", (name,))
+                exists = cur.fetchone()[0]
+        except Exception as e:
+            print(f"Error checking user existence: {e}")
+        finally:
+            conn.close()
+    return exists

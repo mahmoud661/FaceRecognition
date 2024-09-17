@@ -1,58 +1,78 @@
-import os
+from PIL import ImageTk
 import cv2
 import numpy as np
+import face_recognition
 from PIL import Image
+import os
+from DB import insert_user, insert_face_embedding, fetch_all_user_embeddings, user_exists
 from tkinter import simpledialog, messagebox
-import tensorflow_hub as hub
-from tensorflow.keras.preprocessing import image as keras_image
-from tensorflow.keras.applications.mobilenet_v2 import preprocess_input
-from DB import insert_user, fetch_all_users, user_exists, insert_face_embedding, fetch_all_user_embeddings
 
 # Load the DNN-based face detection model
 modelFile = "res10_300x300_ssd_iter_140000.caffemodel"
 configFile = "deploy.prototxt"
 net = cv2.dnn.readNetFromCaffe(configFile, modelFile)
 
-# Load the pre-trained MobileNetV2 model for embeddings
-embedding_model = hub.load(
-    "https://tfhub.dev/google/tf2-preview/mobilenet_v2/feature_vector/4")
+# Cache for known face encodings
+known_face_encodings = {}
+face_names = {}
 
 
-def ensure_directories_exist():
-    """Ensure that the dataset and trainer directories exist."""
-    if not os.path.exists('dataset'):
-        os.makedirs('dataset')
-
-
-def normalize_embedding(embedding):
-    """Normalize the embedding to have a unit norm."""
-    return embedding / np.linalg.norm(embedding)
+def load_known_face_encodings():
+    """Load known face encodings from the database and cache them."""
+    global known_face_encodings
+    global face_names
+    known_face_encodings = fetch_all_user_embeddings()
+    face_names = {name: encoding for name,
+                  encoding in known_face_encodings.items()}
+    print("Loaded known face encodings from database.")
 
 
 def get_face_embedding(image):
-    """Extract face embeddings using TensorFlow Hub (MobileNetV2)."""
-    # Resize the image to 224x224 as required by MobileNetV2
-    image = image.resize((224, 224))
-
-    # Preprocess the image
-    img_array = keras_image.img_to_array(image)
-    img_array = np.expand_dims(img_array, axis=0)
-    img_array = preprocess_input(img_array)
-
-    # Get embeddings
-    embeddings = embedding_model(img_array)
-    normalized_embedding = embeddings.numpy()[0]  # Normalize the embedding
-    return normalize_embedding(normalized_embedding)
+    """Extract face embeddings using face_recognition library."""
+    image = np.array(image)
+    face_locations = face_recognition.face_locations(image)
+    face_encodings = face_recognition.face_encodings(image, face_locations)
+    return face_encodings
 
 
-def capture_and_train():
-    ensure_directories_exist()  # Ensure directories are present
+def save_face_image(face_img, face_name, count):
+    """Save face image to disk."""
+    if not os.path.exists('images'):
+        os.makedirs('images')
+    image_path = f"images/{face_name}_{count}.jpg"
+    cv2.imwrite(image_path, face_img)
+    return image_path
 
-    face_name = simpledialog.askstring("Input", "Enter the name:")
-    if not face_name:
-        messagebox.showerror("Error", "You must enter a name!")
-        return
 
+def add_new_face(name, image):
+    """Add a new face to the database."""
+    embeddings = get_face_embedding(image)
+    if embeddings:
+        embedding = embeddings[0]  # Assume the first face found
+        if not user_exists(name):
+            user_id = insert_user(name)
+            insert_face_embedding(name, np.array(embedding))
+            # Reload known face encodings after adding new face
+            load_known_face_encodings()
+            print(f"Added new face for {name}.")
+        else:
+            print(f"User {name} already exists.")
+    else:
+        print("No face found in the image.")
+
+
+def recognize_face(face_encoding):
+    """Recognize a face encoding using cached embeddings."""
+    for name, known_encoding in face_names.items():
+        known_encoding = np.array(known_encoding)
+        match = face_recognition.compare_faces([known_encoding], face_encoding)
+        if match[0]:
+            return name
+    return "Unknown"
+
+
+def capture_and_train(face_name, video_label, root):
+    """Capture multiple images for a new user, extract embeddings, and save them to the database."""
     if user_exists(face_name):
         messagebox.showinfo("Info", "User already exists!")
         return
@@ -71,10 +91,15 @@ def capture_and_train():
     cam.set(4, 480)
 
     count = 0
-    while True:
+    user_embeddings = []
+
+    def show_frame():
+        nonlocal count, user_embeddings
+
         ret, img = cam.read()
         if not ret:
-            break
+            return
+
         img = cv2.flip(img, 1)
         h, w = img.shape[:2]
         blob = cv2.dnn.blobFromImage(img, 1.0, (300, 300), [
@@ -94,99 +119,63 @@ def capture_and_train():
                 face_img = img[y:y1, x:x1]
                 pil_img = Image.fromarray(
                     cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
+
+                # Extract embedding for both original and augmented images
                 embedding = get_face_embedding(pil_img)
 
-                if embedding is not None:
-                    # Save the embedding to the DB
-                    insert_face_embedding(face_name, embedding)
-                    print(f"Captured face {count} for {face_name}")
+                # Save embeddings for averaging later
+                if embedding:
+                    user_embeddings.append(embedding[0])
 
-        if count >= 50:  # Capture 50 face samples
-            break
-        k = cv2.waitKey(100) & 0xff
-        if k == 27:
-            break
+        # Update the video frame in the label
+        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(img_rgb)
+        img_tk = ImageTk.PhotoImage(image=img_pil)
+        video_label.img_tk = img_tk  # keep a reference to prevent garbage collection
+        video_label.config(image=img_tk)
 
-    cam.release()
-    cv2.destroyAllWindows()
-    print(f"\n[INFO] Training completed for {
-          face_name}. {count} faces captured.")
+        # Stop after capturing 50 face samples
+        if count < 50:
+            root.after(10, show_frame)
+        else:
+            cam.release()
+            avg_embedding = np.mean(user_embeddings, axis=0)
+            insert_face_embedding(face_name, avg_embedding)
+            messagebox.showinfo("Info", f"Training completed for {
+                                face_name}. {count} faces captured.")
+
+    show_frame()
 
 
-def recognize_faces():
-    users = fetch_all_users()  # Fetch users from the database
-    # Fetch all embeddings from the database
-    embeddings_db = fetch_all_user_embeddings()
-
-    if not embeddings_db:
-        messagebox.showerror(
-            "Error", "No face embeddings found in the database! Please capture and train faces first.")
-        return
-
+def capture_and_recognize_face(video_label, root):
+    """Capture a face using the webcam and recognize it in the Tkinter window."""
+    load_known_face_encodings()  # Load known face encodings once at the start
     cam = cv2.VideoCapture(0)
-    cam.set(3, 640)
-    cam.set(4, 480)
 
-    while True:
-        ret, img = cam.read()
+    def show_frame():
+        ret, frame = cam.read()
         if not ret:
-            break
-        img = cv2.flip(img, 1)
-        h, w = img.shape[:2]
-        blob = cv2.dnn.blobFromImage(img, 1.0, (300, 300), [
-                                     104, 117, 123], False, False)
-        net.setInput(blob)
-        detections = net.forward()
+            return
 
-        for i in range(detections.shape[2]):
-            confidence = detections[0, 0, i, 2]
-            if confidence > 0.5:  # Face detection confidence
-                box = detections[0, 0, i, 3:7] * [w, h, w, h]
-                (x, y, x1, y1) = box.astype("int")
-                cv2.rectangle(img, (x, y), (x1, y1), (0, 255, 0), 2)
+        frame = cv2.flip(frame, 1)
+        face_locations = face_recognition.face_locations(frame)
+        face_encodings = face_recognition.face_encodings(frame, face_locations)
 
-                # Extract face ROI and convert it to RGB for embedding extraction
-                face_img = img[y:y1, x:x1]
-                pil_img = Image.fromarray(
-                    cv2.cvtColor(face_img, cv2.COLOR_BGR2RGB))
-                embedding = get_face_embedding(pil_img)
+        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+            name = recognize_face(face_encoding)
+            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
+            cv2.putText(frame, name, (left, top - 10),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
-                if embedding is not None:
-                    print(f"[DEBUG] Extracted embedding for recognition: {
-                          embedding}")
+        # Update the video frame in the label
+        img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        img_pil = Image.fromarray(img_rgb)
+        img_tk = ImageTk.PhotoImage(image=img_pil)
+        video_label.img_tk = img_tk  # keep a reference to prevent garbage collection
+        video_label.config(image=img_tk)
 
-                    # Compute distances between the detected face and known embeddings
-                    distances = {
-                        user_id: np.linalg.norm(normalize_embedding(
-                            embedding) - normalize_embedding(emb))
-                        for user_id, emb in embeddings_db.items()
-                    }
+        root.after(10, show_frame)
 
-                    print(f"[DEBUG] Calculated distances: {distances}")
+    show_frame()
 
-                    # Find the closest user based on minimum distance
-                    closest_id = min(distances, key=distances.get)
-                    closest_distance = distances[closest_id]
 
-                    print(f"[DEBUG] Closest match: User ID {
-                          closest_id}, Distance: {closest_distance}")
-
-                    # Show the recognized user's name and the confidence level
-                    name = users.get(closest_id, "Unknown")
-                    cv2.putText(img, str(closest_id), (x + 5, y - 5),
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
-                    cv2.putText(img, f"{100 - (closest_distance * 100):.2f}%",
-                                (x + 5, y1 + 25), cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 0), 1)
-
-        # Show the resulting frame with recognized faces
-        cv2.imshow('camera', img)
-
-        if cv2.getWindowProperty('camera', cv2.WND_PROP_VISIBLE) < 1:
-            break
-
-        k = cv2.waitKey(10) & 0xff
-        if k == 27:  # Press 'ESC' to exit
-            break
-
-    cam.release()
-    cv2.destroyAllWindows()
