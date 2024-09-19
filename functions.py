@@ -62,14 +62,24 @@ def add_new_face(name, image):
 
 
 def recognize_face(face_encoding):
-    """Recognize a face encoding using cached embeddings."""
+
+    best_match_name = "Unknown"
+    best_match_distance = float('inf')
+
     for name, known_encoding in face_names.items():
         known_encoding = np.array(known_encoding)
         match = face_recognition.compare_faces([known_encoding], face_encoding)
-        if match[0]:
-            return name
-    return "Unknown"
 
+        if match[0]:
+
+            face_distance = face_recognition.face_distance([known_encoding], face_encoding)[0]
+
+
+            if face_distance < best_match_distance:
+                best_match_distance = face_distance
+                best_match_name = name
+
+    return best_match_name
 
 def capture_and_train(face_name, video_label, root):
     """Capture multiple images for a new user, extract embeddings, and save them to the database."""
@@ -148,7 +158,7 @@ def capture_and_train(face_name, video_label, root):
 
 
 def capture_and_recognize_face(video_label, root):
-    """Capture a face using the webcam and recognize it in the Tkinter window."""
+    """Capture a face using the webcam and recognize it using DNN for detection and face_recognition for recognition."""
     load_known_face_encodings()  # Load known face encodings once at the start
     cam = cv2.VideoCapture(0)
 
@@ -158,14 +168,38 @@ def capture_and_recognize_face(video_label, root):
             return
 
         frame = cv2.flip(frame, 1)
-        face_locations = face_recognition.face_locations(frame)
-        face_encodings = face_recognition.face_encodings(frame, face_locations)
+        h, w = frame.shape[:2]
 
-        for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
-            name = recognize_face(face_encoding)
-            cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-            cv2.putText(frame, name, (left, top - 10),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
+        # Use DNN to detect faces
+        blob = cv2.dnn.blobFromImage(frame, 1.0, (300, 300), [104, 117, 123], False, False)
+        net.setInput(blob)
+        detections = net.forward()
+
+        face_locations = []
+
+        for i in range(detections.shape[2]):
+            confidence = detections[0, 0, i, 2]
+            if confidence > 0.6:  # Only consider detections with high confidence
+                # Compute the coordinates of the bounding box
+                box = detections[0, 0, i, 3:7] * [w, h, w, h]
+                (x, y, x1, y1) = box.astype("int")
+
+                # Add the bounding box to the face_locations list (in top, right, bottom, left format)
+                face_locations.append((y, x1, y1, x))
+
+                # Draw the bounding box on the frame
+                cv2.rectangle(frame, (x, y), (x1, y1), (255, 0, 0), 2)
+
+        # If faces were detected by DNN, use face_recognition to encode them
+        if face_locations:
+            face_encodings = face_recognition.face_encodings(frame, face_locations)
+
+            for (top, right, bottom, left), face_encoding in zip(face_locations, face_encodings):
+                # Recognize the face using existing face recognition method
+                name = recognize_face(face_encoding)
+
+                # Display the name on the frame
+                cv2.putText(frame, name, (left, top - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 0, 0), 2)
 
         # Update the video frame in the label
         img_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -174,8 +208,7 @@ def capture_and_recognize_face(video_label, root):
         video_label.img_tk = img_tk  # keep a reference to prevent garbage collection
         video_label.config(image=img_tk)
 
+        # Repeat the loop every 10ms
         root.after(10, show_frame)
 
     show_frame()
-
-

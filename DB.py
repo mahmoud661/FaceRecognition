@@ -30,15 +30,10 @@ def create_table_if_not_exists():
                     name TEXT NOT NULL UNIQUE,
                     face_embedding BYTEA
                 );
-                CREATE TABLE IF NOT EXISTS UserImages (
-                    id SERIAL PRIMARY KEY,
-                    user_name TEXT REFERENCES Users(name),
-                    image_path TEXT
-                );
                 '''
                 cur.execute(create_table_query)
                 conn.commit()
-                print("Tables 'Users' and 'UserImages' have been created (if they did not exist).")
+                print("Tables 'Users' have been created (if they did not exist).")
         except Exception as e:
             print(f"Error: {e}")
         finally:
@@ -82,22 +77,6 @@ def insert_face_embedding(name, embedding=None):
         finally:
             conn.close()
 
-def insert_user_image(name, image_path):
-    """Insert the path of a user's face image."""
-    conn = connect_db()
-    if conn:
-        try:
-            with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO UserImages (user_name, image_path) VALUES (%s, %s);",
-                    (name, image_path))
-                conn.commit()
-                print(f"Inserted image path for {name}: {image_path}.")
-        except Exception as e:
-            print(f"Error inserting image path: {e}")
-        finally:
-            conn.close()
-
 def fetch_all_user_embeddings():
     """Fetch all user embeddings from the database."""
     conn = connect_db()
@@ -129,3 +108,5 @@ def user_exists(name):
         finally:
             conn.close()
     return exists
+
+create_table_if_not_exists()
