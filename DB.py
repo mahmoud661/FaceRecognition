@@ -109,4 +109,3 @@ def user_exists(name):
             conn.close()
     return exists
 
-create_table_if_not_exists()
